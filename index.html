@@ -35,6 +35,7 @@ button,input{font:inherit;color:inherit}
 /* Giriş ekranı */
 #gate{height:100%;display:grid;place-items:center;padding:24px}
 .gate-box{width:min(380px,100%);display:flex;flex-direction:column;gap:18px}
+.gate-box[hidden]{display:none}
 .gate-box h1{font-size:2.2rem;font-weight:700;letter-spacing:-.02em;line-height:1.05}
 .gate-box p{color:var(--muted);line-height:1.5}
 .gate-box input{
@@ -44,6 +45,13 @@ button,input{font:inherit;color:inherit}
 .gate-box button{
   background:var(--mine);color:var(--mine-ink);border:0;border-radius:14px;
   padding:14px;font-weight:600;cursor:pointer;
+}
+.gate-box button.pick{
+  font-size:1.25rem;letter-spacing:.12em;font-variant-numeric:tabular-nums;
+  padding:18px;
+}
+.gate-box button.back{
+  background:none;border:1px solid var(--line);color:var(--muted);
 }
 #gateErr{color:var(--warn);min-height:1.2em;font-size:.9rem;text-align:center}
 
@@ -105,12 +113,22 @@ form button:disabled{opacity:.5;cursor:default}
 <body>
 
 <section id="gate">
-  <div class="gate-box">
-    <h1>Kodu gir</h1>
-    <p>Sohbete girmek için sana verilen kodu yaz.</p>
-    <input id="codeInput" type="password" autocomplete="off" placeholder="••••••" aria-label="Giriş kodu">
-    <button id="enterBtn">Giriş yap</button>
+  <!-- 1. adım: oda kodu -->
+  <div class="gate-box" id="stepRoom">
+    <h1>Oda kodu</h1>
+    <p>Sohbete girmek için oda kodunu yaz.</p>
+    <input id="codeInput" type="password" autocomplete="off" placeholder="••••••" aria-label="Oda kodu">
+    <button id="enterBtn">Devam</button>
     <div id="gateErr" role="alert"></div>
+  </div>
+
+  <!-- 2. adım: kimlik seçimi -->
+  <div class="gate-box" id="stepPick" hidden>
+    <h1>Kimsin?</h1>
+    <p>Giriş yapmak istediğin kodu seç.</p>
+    <button class="pick" data-key="25.01.14">25.01.14</button>
+    <button class="pick" data-key="22.02.14">22.02.14</button>
+    <button class="back" id="backBtn" type="button">Geri</button>
   </div>
 </section>
 
@@ -143,9 +161,13 @@ const firebaseConfig = {
   appId: "1:583892968779:web:38f583b71b777a39b5b4ce"
 };
 
-const CODES = {
-  "250114": { id: "A", name: "Ben" },
-  "220214": { id: "B", name: "Karşı taraf" }
+// Tek oda kodu
+const ROOM_CODE = "21.22.25";
+
+// Oda koduna girince çıkan iki seçenek (id'ler eskisiyle aynı: A ve B)
+const PROFILES = {
+  "25.01.14": { id: "A", name: "Ben" },
+  "22.02.14": { id: "B", name: "Karşı taraf" }
 };
 
 // Görüldükten kaç ms sonra silinsin (1 dakika)
@@ -166,11 +188,22 @@ let editing = null;      // {id, value}
 let forceScroll = true;
 
 /* ---- Giriş ---- */
-function tryEnter(code){
-  const u = CODES[code.trim()];
-  if(!u){ $("gateErr").textContent = "Kod yanlış, tekrar dene."; return false; }
+function checkRoom(code){
+  if(code.trim() !== ROOM_CODE){
+    $("gateErr").textContent = "Oda kodu yanlış, tekrar dene.";
+    return false;
+  }
+  $("gateErr").textContent = "";
+  $("stepRoom").hidden = true;
+  $("stepPick").hidden = false;
+  return true;
+}
+
+function enterAs(key){
+  const u = PROFILES[key];
+  if(!u) return false;
   me = u;
-  sessionStorage.setItem("chatCode", code.trim());
+  sessionStorage.setItem("chatProfile", key);
   $("gate").style.display = "none";
   $("app").style.display = "flex";
   $("who").textContent = u.name + " olarak giriş yaptın";
@@ -178,16 +211,26 @@ function tryEnter(code){
   start();
   return true;
 }
-$("enterBtn").onclick = () => tryEnter($("codeInput").value);
-$("codeInput").addEventListener("keydown", e => { if(e.key === "Enter") tryEnter(e.target.value); });
+
+$("enterBtn").onclick = () => checkRoom($("codeInput").value);
+$("codeInput").addEventListener("keydown", e => { if(e.key === "Enter") checkRoom(e.target.value); });
+document.querySelectorAll(".pick").forEach(b => {
+  b.onclick = () => enterAs(b.dataset.key);
+});
+$("backBtn").onclick = () => {
+  $("stepPick").hidden = true;
+  $("stepRoom").hidden = false;
+  $("codeInput").value = "";
+  $("codeInput").focus();
+};
 $("logout").onclick = () => {
-  sessionStorage.removeItem("chatCode");
+  sessionStorage.removeItem("chatProfile");
   if(unsub) unsub();
   clearInterval(tick);
   location.reload();
 };
-const saved = sessionStorage.getItem("chatCode");
-if(saved) tryEnter(saved);
+const saved = sessionStorage.getItem("chatProfile");
+if(saved) enterAs(saved);
 
 /* ---- Dinleme ---- */
 function start(){
