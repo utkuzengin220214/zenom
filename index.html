@@ -71,6 +71,8 @@ header small{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
 .them .bubble{background:var(--theirs);border:1px solid var(--line);border-bottom-left-radius:5px}
 .meta{font-size:.72rem;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
 .meta .timer{color:var(--warn);font-variant-numeric:tabular-nums}
+.tick{font-weight:700;letter-spacing:-.15em;margin-right:.15em}
+.tick.seen{color:#34b7f1}
 .act{background:none;border:0;padding:0;cursor:pointer;color:var(--muted);font-size:.72rem;text-decoration:underline}
 .act.del{color:var(--warn)}
 .editbox{display:flex;flex-direction:column;gap:6px;align-items:flex-end;width:min(420px,70vw)}
@@ -193,6 +195,7 @@ function start(){
     docs = snap.docs.map(d => ({ id: d.id, pending: d.metadata.hasPendingWrites, ...d.data() }));
     // Düzenlenen mesaj silindiyse düzenlemeyi kapat
     if(editing && !docs.some(m => m.id === editing.id)) editing = null;
+    markDelivered();
     markSeen();
     cleanup();
     render();
@@ -202,21 +205,47 @@ function start(){
   tick = setInterval(() => { cleanup(); updateTimers(); markSeen(); }, 1000);
   document.addEventListener("visibilitychange", markSeen);
   window.addEventListener("focus", markSeen);
+  window.addEventListener("pagehide", purgeSeenOnLeave);
 }
 
-/* ---- Görüldü işaretleme ---- */
+/* ---- İletildi işaretleme (karşıdan gelen mesaj, sayfa açıksa) ---- */
+const deliveredReq = new Set();
+function markDelivered(){
+  docs.forEach(m => {
+    if(m.from !== me.id && !m.deliveredAt && !m.pending && !deliveredReq.has(m.id)){
+      deliveredReq.add(m.id);
+      col.doc(m.id).update({
+        deliveredAt: firebase.firestore.Timestamp.fromMillis(Date.now())
+      }).catch(()=>{});
+    }
+  });
+}
+
+/* ---- Görüldü işaretleme (sayfa açık ve görünürken) ---- */
+const seenReq = new Set();
 function markSeen(){
   if(document.visibilityState !== "visible") return;
   docs.forEach(m => {
-    if(m.from !== me.id && !m.seenAt && !m.pending){
+    if(m.from !== me.id && !m.seenAt && !m.pending && !seenReq.has(m.id)){
+      seenReq.add(m.id);
       const now = Date.now();
-      col.doc(m.id).update({
+      const upd = {
         seenAt: firebase.firestore.Timestamp.fromMillis(now),
         deleteAt: firebase.firestore.Timestamp.fromMillis(now + DELETE_AFTER_MS)
-      }).catch(()=>{});
-      m.seenAt = true;
+      };
+      if(!m.deliveredAt) upd.deliveredAt = firebase.firestore.Timestamp.fromMillis(now);
+      col.doc(m.id).update(upd).catch(()=>{ seenReq.delete(m.id); });
     }
   });
+}
+
+/* ---- Sayfadan çıkarken görülmüş mesajları hemen sil ---- */
+function purgeSeenOnLeave(){
+  const seen = docs.filter(m => m.deleteAt && !m._deleting);
+  if(!seen.length) return;
+  const batch = db.batch();
+  seen.forEach(m => batch.delete(col.doc(m.id)));
+  batch.commit().catch(()=>{});
 }
 
 /* ---- Süresi dolanları sil ---- */
@@ -377,7 +406,12 @@ function updateTimers(){
     const rem = remaining(m);
     const tm = el.querySelector(".timer");
     const st = el.querySelector(".status");
-    if(st) st.textContent = m.deleteAt ? "Görüldü" : (m.pending ? "Gönderiliyor" : "İletildi");
+    if(st){
+      if(m.pending){ st.className = "status tick"; st.textContent = "🕓"; st.title = "Gönderiliyor"; }
+      else if(m.seenAt || m.deleteAt){ st.className = "status tick seen"; st.textContent = "✓✓"; st.title = "Görüldü"; }
+      else if(m.deliveredAt){ st.className = "status tick"; st.textContent = "✓✓"; st.title = "İletildi"; }
+      else { st.className = "status tick"; st.textContent = "✓"; st.title = "Gönderildi"; }
+    }
     if(tm) tm.textContent = rem !== null ? "• " + fmtRemain(rem) + " sonra silinir" : "";
   });
 }
@@ -394,6 +428,7 @@ $("sendForm").addEventListener("submit", e => {
     text,
     from: me.id,
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    deliveredAt: null,
     seenAt: null,
     deleteAt: null
   }).catch(err => alert("Gönderilemedi: " + err.message));
