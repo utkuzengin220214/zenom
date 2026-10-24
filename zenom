@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sohbet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#e8edf1; --panel:#ffffff; --ink:#14232b; --muted:#6b7c86;
+  --mine:#0f4c5c; --mine-ink:#f2fbfd; --theirs:#ffffff; --line:#d3dce2;
+  --warn:#d9560b; --radius:18px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e171c; --panel:#16232a; --ink:#e6eef2; --muted:#8aa0ab;
+    --mine:#1d7a8f; --mine-ink:#f2fbfd; --theirs:#1d2e36; --line:#2a3d47;
+    --warn:#ff8a4c; color-scheme: dark;
+  }
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{
+  font-family:"Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:var(--bg); color:var(--ink);
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--mine);outline-offset:2px}
+
+/* Giriş ekranı */
+#gate{height:100%;display:grid;place-items:center;padding:24px}
+.gate-box{width:min(380px,100%);display:flex;flex-direction:column;gap:18px}
+.gate-box h1{font-size:2.2rem;font-weight:700;letter-spacing:-.02em;line-height:1.05}
+.gate-box p{color:var(--muted);line-height:1.5}
+.gate-box input{
+  background:var(--panel);border:1.5px solid var(--line);border-radius:14px;
+  padding:14px 16px;font-size:1.1rem;letter-spacing:.15em;text-align:center;
+}
+.gate-box button{
+  background:var(--mine);color:var(--mine-ink);border:0;border-radius:14px;
+  padding:14px;font-weight:600;cursor:pointer;
+}
+#gateErr{color:var(--warn);min-height:1.2em;font-size:.9rem;text-align:center}
+
+/* Sohbet */
+#app{display:none;height:100%;flex-direction:column;max-width:760px;margin:0 auto;background:var(--panel)}
+header{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 18px;border-bottom:1px solid var(--line);
+}
+header b{font-size:1.05rem}
+header small{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
+#logout{background:none;border:1px solid var(--line);border-radius:10px;padding:7px 12px;cursor:pointer;color:var(--muted)}
+#list{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px;background:var(--bg)}
+.empty{margin:auto;text-align:center;color:var(--muted);max-width:260px;line-height:1.5}
+.msg{max-width:78%;display:flex;flex-direction:column;gap:3px}
+.msg.me{align-self:flex-end;align-items:flex-end}
+.msg.them{align-self:flex-start;align-items:flex-start}
+.bubble{
+  padding:10px 14px;border-radius:var(--radius);line-height:1.4;
+  white-space:pre-wrap;word-break:break-word;
+}
+.me .bubble{background:var(--mine);color:var(--mine-ink);border-bottom-right-radius:5px}
+.them .bubble{background:var(--theirs);border:1px solid var(--line);border-bottom-left-radius:5px}
+.meta{font-size:.72rem;color:var(--muted);display:flex;gap:8px}
+.meta .timer{color:var(--warn);font-variant-numeric:tabular-nums}
+form{display:flex;gap:10px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel)}
+form input{
+  flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
+  border-radius:999px;padding:12px 18px;
+}
+form button{
+  background:var(--mine);color:var(--mine-ink);border:0;border-radius:999px;
+  padding:0 22px;font-weight:600;cursor:pointer;
+}
+form button:disabled{opacity:.5;cursor:default}
+@media (prefers-reduced-motion: no-preference){
+  .msg{animation:pop .18s ease-out}
+  @keyframes pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+}
+</style>
+</head>
+<body>
+
+<section id="gate">
+  <div class="gate-box">
+    <h1>Kodu gir</h1>
+    <p>Sohbete girmek için sana verilen kodu yaz.</p>
+    <input id="codeInput" type="password" autocomplete="off" placeholder="••••••" aria-label="Giriş kodu">
+    <button id="enterBtn">Giriş yap</button>
+    <div id="gateErr" role="alert"></div>
+  </div>
+</section>
+
+<main id="app">
+  <header>
+    <div><b id="who"></b><small>Görülen mesajlar 3 dakika sonra silinir</small></div>
+    <button id="logout">Çıkış</button>
+  </header>
+  <div id="list" aria-live="polite"></div>
+  <form id="sendForm">
+    <input id="msgInput" autocomplete="off" placeholder="Mesaj yaz" aria-label="Mesaj">
+    <button id="sendBtn" type="submit">Gönder</button>
+  </form>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+/* ============ AYARLAR ============ */
+
+// 1) Firebase konsolundan aldığın config'i buraya yapıştır
+const firebaseConfig = {
+  apiKey: "AIzaSyDPNrjApyG_sjWL6ZJrLnQkFLRyolvxSP0",
+  authDomain: "zenom-14d18.firebaseapp.com",
+  projectId: "zenom-14d18",
+  storageBucket: "zenom-14d18.firebasestorage.app",
+  messagingSenderId: "583892968779",
+  appId: "1:583892968779:web:38f583b71b777a39b5b4ce"
+};
+
+// 2) İki kişinin giriş kodları (istediğin gibi değiştir)
+const CODES = {
+  "250114": { id: "A", name: "Ben" },
+  "220214": { id: "B", name: "Karşı taraf" }
+};
+
+// 3) Görüldükten kaç ms sonra silinsin (3 dakika)
+const DELETE_AFTER_MS = 90 * 1000;
+
+/* ================================= */
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const col = db.collection("messages");
+
+const $ = id => document.getElementById(id);
+let me = null;
+let unsub = null;
+let docs = [];           // {id, ...data}
+let tick = null;
+
+/* ---- Giriş ---- */
+function tryEnter(code){
+  const u = CODES[code.trim()];
+  if(!u){ $("gateErr").textContent = "Kod yanlış, tekrar dene."; return false; }
+  me = u;
+  sessionStorage.setItem("chatCode", code.trim());
+  $("gate").style.display = "none";
+  $("app").style.display = "flex";
+  $("who").textContent = u.name + " olarak giriş yaptın";
+  start();
+  return true;
+}
+$("enterBtn").onclick = () => tryEnter($("codeInput").value);
+$("codeInput").addEventListener("keydown", e => { if(e.key === "Enter") tryEnter(e.target.value); });
+$("logout").onclick = () => {
+  sessionStorage.removeItem("chatCode");
+  if(unsub) unsub();
+  clearInterval(tick);
+  location.reload();
+};
+const saved = sessionStorage.getItem("chatCode");
+if(saved) tryEnter(saved);
+
+/* ---- Dinleme ---- */
+function start(){
+  unsub = col.orderBy("createdAt").onSnapshot(snap => {
+    docs = snap.docs.map(d => ({ id: d.id, pending: d.metadata.hasPendingWrites, ...d.data() }));
+    markSeen();
+    cleanup();
+    render();
+  }, err => {
+    $("list").innerHTML = '<div class="empty">Bağlantı hatası: ' + err.message + '</div>';
+  });
+  tick = setInterval(() => { cleanup(); updateTimers(); markSeen(); }, 1000);
+  document.addEventListener("visibilitychange", markSeen);
+  window.addEventListener("focus", markSeen);
+}
+
+/* ---- Görüldü işaretleme (karşıdan gelen mesajlar, sayfa açık ve görünürken) ---- */
+function markSeen(){
+  if(document.visibilityState !== "visible") return;
+  docs.forEach(m => {
+    if(m.from !== me.id && !m.seenAt && !m.pending){
+      const now = Date.now();
+      col.doc(m.id).update({
+        seenAt: firebase.firestore.Timestamp.fromMillis(now),
+        deleteAt: firebase.firestore.Timestamp.fromMillis(now + DELETE_AFTER_MS)
+      }).catch(()=>{});
+      m.seenAt = true; // aynı mesaja tekrar yazmamak için
+    }
+  });
+}
+
+/* ---- Süresi dolanları sil ---- */
+function cleanup(){
+  // Süresi dolan mesajlar sunucuda (TTL / Cloud Function) silinir.
+  // Burada ek olarak ekrandan anında gizliyoruz ve silmeyi de deniyoruz.
+  const now = Date.now();
+  let changed = false;
+  docs.forEach(m => {
+    if(m.deleteAt && m.deleteAt.toMillis && m.deleteAt.toMillis() <= now && !m._deleting){
+      m._deleting = true;
+      changed = true;
+      col.doc(m.id).delete().catch(()=>{});
+    }
+  });
+  if(changed) render();
+}
+
+/* ---- Çizim ---- */
+function fmtTime(ts){
+  if(!ts || !ts.toDate) return "";
+  return ts.toDate().toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit"});
+}
+function remaining(m){
+  if(!m.deleteAt || !m.deleteAt.toMillis) return null;
+  return Math.max(0, Math.ceil((m.deleteAt.toMillis() - Date.now())/1000));
+}
+function fmtRemain(s){
+  return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0");
+}
+
+function render(){
+  const list = $("list");
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  const visible = docs.filter(m => !m._deleting);
+  list.innerHTML = "";
+  if(!visible.length){
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = "Henüz mesaj yok. İlk mesajı sen yaz.";
+    list.appendChild(e);
+    return;
+  }
+  visible.forEach(m => {
+    const mine = m.from === me.id;
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + (mine ? "me" : "them");
+    wrap.dataset.id = m.id;
+
+    const b = document.createElement("div");
+    b.className = "bubble";
+    b.textContent = m.text;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const t = document.createElement("span");
+    t.textContent = fmtTime(m.createdAt);
+    meta.appendChild(t);
+
+    if(mine){
+      const st = document.createElement("span");
+      st.className = "status";
+      meta.appendChild(st);
+    }
+    const tm = document.createElement("span");
+    tm.className = "timer";
+    meta.appendChild(tm);
+
+    wrap.append(b, meta);
+    list.appendChild(wrap);
+  });
+  updateTimers();
+  if(nearBottom || true) list.scrollTop = list.scrollHeight;
+}
+
+function updateTimers(){
+  document.querySelectorAll(".msg").forEach(el => {
+    const m = docs.find(x => x.id === el.dataset.id);
+    if(!m) return;
+    const rem = remaining(m);
+    const tm = el.querySelector(".timer");
+    const st = el.querySelector(".status");
+    if(st) st.textContent = m.deleteAt ? "Görüldü" : (m.pending ? "Gönderiliyor" : "İletildi");
+    if(tm) tm.textContent = rem !== null ? "• " + fmtRemain(rem) + " sonra silinir" : "";
+  });
+}
+
+/* ---- Gönderme ---- */
+$("sendForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = $("msgInput");
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = "";
+  col.add({
+    text,
+    from: me.id,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    seenAt: null,
+    deleteAt: null
+  }).catch(err => alert("Gönderilemedi: " + err.message));
+  input.focus();
+});
+</script>
+</body>
+</html>
