@@ -134,7 +134,7 @@ form button:disabled{opacity:.5;cursor:default}
 
 <main id="app">
   <header>
-    <div><b id="who"></b><small>Görülen mesajlar 1 dakika sonra silinir</small></div>
+    <div><b id="who"></b><small>Görülen mesajlar 1 dakika sonra ya da çıkınca silinir</small></div>
     <div class="hbtns">
       <button id="clearAll">Geçmişi sil</button>
       <button id="logout">Çıkış</button>
@@ -186,6 +186,7 @@ let docs = [];
 let tick = null;
 let editing = null;      // {id, value}
 let forceScroll = true;
+const seenReq = new Set();
 
 /* ---- Giriş ---- */
 function checkRoom(code){
@@ -223,7 +224,8 @@ $("backBtn").onclick = () => {
   $("codeInput").value = "";
   $("codeInput").focus();
 };
-$("logout").onclick = () => {
+$("logout").onclick = async () => {
+  await purgeSeen();
   sessionStorage.removeItem("chatProfile");
   if(unsub) unsub();
   clearInterval(tick);
@@ -234,10 +236,13 @@ if(saved) enterAs(saved);
 
 /* ---- Dinleme ---- */
 function start(){
+  let firstSnap = true;
   unsub = col.orderBy("createdAt").onSnapshot(snap => {
     docs = snap.docs.map(d => ({ id: d.id, pending: d.metadata.hasPendingWrites, ...d.data() }));
     // Düzenlenen mesaj silindiyse düzenlemeyi kapat
     if(editing && !docs.some(m => m.id === editing.id)) editing = null;
+    // Önceki oturumda görülüp silinememiş mesajları temizle (yedek)
+    if(firstSnap){ firstSnap = false; purgeSeen(); }
     markDelivered();
     markSeen();
     cleanup();
@@ -246,9 +251,12 @@ function start(){
     $("list").innerHTML = '<div class="empty">Bağlantı hatası: ' + err.message + '</div>';
   });
   tick = setInterval(() => { cleanup(); updateTimers(); markSeen(); }, 1000);
-  document.addEventListener("visibilitychange", markSeen);
+  document.addEventListener("visibilitychange", () => {
+    if(document.visibilityState === "hidden") purgeSeen();
+    else markSeen();
+  });
   window.addEventListener("focus", markSeen);
-  window.addEventListener("pagehide", purgeSeenOnLeave);
+  window.addEventListener("pagehide", purgeSeen);
 }
 
 /* ---- İletildi işaretleme (karşıdan gelen mesaj, sayfa açıksa) ---- */
@@ -265,9 +273,8 @@ function markDelivered(){
 }
 
 /* ---- Görüldü işaretleme (sayfa açık ve görünürken) ---- */
-const seenReq = new Set();
 function markSeen(){
-  if(document.visibilityState !== "visible") return;
+  if(!me || document.visibilityState !== "visible") return;
   docs.forEach(m => {
     if(m.from !== me.id && !m.seenAt && !m.pending && !seenReq.has(m.id)){
       seenReq.add(m.id);
@@ -282,13 +289,17 @@ function markSeen(){
   });
 }
 
-/* ---- Sayfadan çıkarken görülmüş mesajları hemen sil ---- */
-function purgeSeenOnLeave(){
-  const seen = docs.filter(m => m.deleteAt && !m._deleting);
-  if(!seen.length) return;
+/* ---- Görülmüş mesajları hemen sil (çıkarken / sekme gizlenince) ---- */
+function purgeSeen(){
+  if(!me) return Promise.resolve();
+  const seen = docs.filter(m =>
+    m.from !== me.id && !m._deleting && (m.deleteAt || seenReq.has(m.id))
+  );
+  if(!seen.length) return Promise.resolve();
+  seen.forEach(m => m._deleting = true);
   const batch = db.batch();
   seen.forEach(m => batch.delete(col.doc(m.id)));
-  batch.commit().catch(()=>{});
+  return batch.commit().catch(()=>{});
 }
 
 /* ---- Süresi dolanları sil ---- */
