@@ -55,7 +55,9 @@ header{
 }
 header b{font-size:1.05rem}
 header small{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
-#logout{background:none;border:1px solid var(--line);border-radius:10px;padding:7px 12px;cursor:pointer;color:var(--muted)}
+.hbtns{display:flex;gap:8px;flex-shrink:0}
+.hbtns button{background:none;border:1px solid var(--line);border-radius:10px;padding:7px 12px;cursor:pointer;color:var(--muted)}
+#clearAll{color:var(--warn);border-color:var(--warn)}
 #list{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px;background:var(--bg)}
 .empty{margin:auto;text-align:center;color:var(--muted);max-width:260px;line-height:1.5}
 .msg{max-width:78%;display:flex;flex-direction:column;gap:3px}
@@ -67,8 +69,21 @@ header small{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
 }
 .me .bubble{background:var(--mine);color:var(--mine-ink);border-bottom-right-radius:5px}
 .them .bubble{background:var(--theirs);border:1px solid var(--line);border-bottom-left-radius:5px}
-.meta{font-size:.72rem;color:var(--muted);display:flex;gap:8px}
+.meta{font-size:.72rem;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
 .meta .timer{color:var(--warn);font-variant-numeric:tabular-nums}
+.act{background:none;border:0;padding:0;cursor:pointer;color:var(--muted);font-size:.72rem;text-decoration:underline}
+.act.del{color:var(--warn)}
+.editbox{display:flex;flex-direction:column;gap:6px;align-items:flex-end;width:min(420px,70vw)}
+.editbox input{
+  width:100%;background:var(--panel);border:1.5px solid var(--mine);
+  border-radius:14px;padding:10px 14px;
+}
+.editbox div{display:flex;gap:8px}
+.editbox button{
+  border:1px solid var(--line);background:var(--panel);border-radius:10px;
+  padding:5px 12px;cursor:pointer;font-size:.85rem;
+}
+.editbox button.ok{background:var(--mine);color:var(--mine-ink);border-color:var(--mine)}
 form{display:flex;gap:10px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel)}
 form input{
   flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
@@ -99,8 +114,11 @@ form button:disabled{opacity:.5;cursor:default}
 
 <main id="app">
   <header>
-    <div><b id="who"></b><small>Görülen mesajlar 3 dakika sonra silinir</small></div>
-    <button id="logout">Çıkış</button>
+    <div><b id="who"></b><small>Görülen mesajlar 1 dakika sonra silinir</small></div>
+    <div class="hbtns">
+      <button id="clearAll">Geçmişi sil</button>
+      <button id="logout">Çıkış</button>
+    </div>
   </header>
   <div id="list" aria-live="polite"></div>
   <form id="sendForm">
@@ -114,7 +132,6 @@ form button:disabled{opacity:.5;cursor:default}
 <script>
 /* ============ AYARLAR ============ */
 
-// 1) Firebase konsolundan aldığın config'i buraya yapıştır
 const firebaseConfig = {
   apiKey: "AIzaSyDPNrjApyG_sjWL6ZJrLnQkFLRyolvxSP0",
   authDomain: "zenom-14d18.firebaseapp.com",
@@ -124,14 +141,13 @@ const firebaseConfig = {
   appId: "1:583892968779:web:38f583b71b777a39b5b4ce"
 };
 
-// 2) İki kişinin giriş kodları (istediğin gibi değiştir)
 const CODES = {
   "250114": { id: "A", name: "Ben" },
   "220214": { id: "B", name: "Karşı taraf" }
 };
 
-// 3) Görüldükten kaç ms sonra silinsin (3 dakika)
-const DELETE_AFTER_MS = 90 * 1000;
+// Görüldükten kaç ms sonra silinsin (1 dakika)
+const DELETE_AFTER_MS = 60 * 1000;
 
 /* ================================= */
 
@@ -142,8 +158,10 @@ const col = db.collection("messages");
 const $ = id => document.getElementById(id);
 let me = null;
 let unsub = null;
-let docs = [];           // {id, ...data}
+let docs = [];
 let tick = null;
+let editing = null;      // {id, value}
+let forceScroll = true;
 
 /* ---- Giriş ---- */
 function tryEnter(code){
@@ -154,6 +172,7 @@ function tryEnter(code){
   $("gate").style.display = "none";
   $("app").style.display = "flex";
   $("who").textContent = u.name + " olarak giriş yaptın";
+  forceScroll = true;
   start();
   return true;
 }
@@ -172,6 +191,8 @@ if(saved) tryEnter(saved);
 function start(){
   unsub = col.orderBy("createdAt").onSnapshot(snap => {
     docs = snap.docs.map(d => ({ id: d.id, pending: d.metadata.hasPendingWrites, ...d.data() }));
+    // Düzenlenen mesaj silindiyse düzenlemeyi kapat
+    if(editing && !docs.some(m => m.id === editing.id)) editing = null;
     markSeen();
     cleanup();
     render();
@@ -183,7 +204,7 @@ function start(){
   window.addEventListener("focus", markSeen);
 }
 
-/* ---- Görüldü işaretleme (karşıdan gelen mesajlar, sayfa açık ve görünürken) ---- */
+/* ---- Görüldü işaretleme ---- */
 function markSeen(){
   if(document.visibilityState !== "visible") return;
   docs.forEach(m => {
@@ -193,15 +214,13 @@ function markSeen(){
         seenAt: firebase.firestore.Timestamp.fromMillis(now),
         deleteAt: firebase.firestore.Timestamp.fromMillis(now + DELETE_AFTER_MS)
       }).catch(()=>{});
-      m.seenAt = true; // aynı mesaja tekrar yazmamak için
+      m.seenAt = true;
     }
   });
 }
 
 /* ---- Süresi dolanları sil ---- */
 function cleanup(){
-  // Süresi dolan mesajlar sunucuda (TTL / Cloud Function) silinir.
-  // Burada ek olarak ekrandan anında gizliyoruz ve silmeyi de deniyoruz.
   const now = Date.now();
   let changed = false;
   docs.forEach(m => {
@@ -213,6 +232,41 @@ function cleanup(){
   });
   if(changed) render();
 }
+
+/* ---- Mesaj sil / düzenle / geçmişi sil ---- */
+function deleteMessage(id){
+  if(!confirm("Bu mesaj iki taraf için de silinsin mi?")) return;
+  col.doc(id).delete().catch(err => alert("Silinemedi: " + err.message));
+}
+
+function saveEdit(){
+  if(!editing) return;
+  const text = editing.value.trim();
+  const id = editing.id;
+  const old = docs.find(m => m.id === id);
+  editing = null;
+  if(!text){ render(); return; }
+  if(old && old.text === text){ render(); return; }
+  col.doc(id).update({ text, edited: true })
+    .catch(err => alert("Düzenlenemedi: " + err.message));
+  render();
+}
+
+async function clearHistory(){
+  if(!confirm("Tüm sohbet geçmişi hem senin hem karşı tarafın ekranından silinecek. Emin misin?")) return;
+  try{
+    const snap = await col.get();
+    const refs = snap.docs.map(d => d.ref);
+    for(let i = 0; i < refs.length; i += 400){
+      const batch = db.batch();
+      refs.slice(i, i + 400).forEach(r => batch.delete(r));
+      await batch.commit();
+    }
+  }catch(err){
+    alert("Geçmiş silinemedi: " + err.message);
+  }
+}
+$("clearAll").onclick = clearHistory;
 
 /* ---- Çizim ---- */
 function fmtTime(ts){
@@ -239,36 +293,81 @@ function render(){
     list.appendChild(e);
     return;
   }
+  let editInput = null;
   visible.forEach(m => {
     const mine = m.from === me.id;
     const wrap = document.createElement("div");
     wrap.className = "msg " + (mine ? "me" : "them");
     wrap.dataset.id = m.id;
 
-    const b = document.createElement("div");
-    b.className = "bubble";
-    b.textContent = m.text;
+    if(editing && editing.id === m.id){
+      const box = document.createElement("div");
+      box.className = "editbox";
+      const inp = document.createElement("input");
+      inp.value = editing.value;
+      inp.setAttribute("aria-label", "Mesajı düzenle");
+      inp.addEventListener("input", () => { editing.value = inp.value; });
+      inp.addEventListener("keydown", e => {
+        if(e.key === "Enter"){ e.preventDefault(); saveEdit(); }
+        if(e.key === "Escape"){ editing = null; render(); }
+      });
+      const row = document.createElement("div");
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.textContent = "İptal";
+      cancel.onclick = () => { editing = null; render(); };
+      const ok = document.createElement("button");
+      ok.type = "button"; ok.className = "ok"; ok.textContent = "Kaydet";
+      ok.onclick = saveEdit;
+      row.append(cancel, ok);
+      box.append(inp, row);
+      wrap.appendChild(box);
+      editInput = inp;
+    } else {
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.textContent = m.text;
+      wrap.appendChild(b);
 
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const t = document.createElement("span");
-    t.textContent = fmtTime(m.createdAt);
-    meta.appendChild(t);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const t = document.createElement("span");
+      t.textContent = fmtTime(m.createdAt);
+      meta.appendChild(t);
 
-    if(mine){
-      const st = document.createElement("span");
-      st.className = "status";
-      meta.appendChild(st);
+      if(m.edited){
+        const ed = document.createElement("span");
+        ed.textContent = "düzenlendi";
+        meta.appendChild(ed);
+      }
+      if(mine){
+        const st = document.createElement("span");
+        st.className = "status";
+        meta.appendChild(st);
+      }
+      const tm = document.createElement("span");
+      tm.className = "timer";
+      meta.appendChild(tm);
+
+      if(mine && !m.pending){
+        const eb = document.createElement("button");
+        eb.type = "button"; eb.className = "act"; eb.textContent = "Düzenle";
+        eb.onclick = () => { editing = { id: m.id, value: m.text }; render(); };
+        const db_ = document.createElement("button");
+        db_.type = "button"; db_.className = "act del"; db_.textContent = "Sil";
+        db_.onclick = () => deleteMessage(m.id);
+        meta.append(eb, db_);
+      }
+      wrap.appendChild(meta);
     }
-    const tm = document.createElement("span");
-    tm.className = "timer";
-    meta.appendChild(tm);
-
-    wrap.append(b, meta);
     list.appendChild(wrap);
   });
   updateTimers();
-  if(nearBottom || true) list.scrollTop = list.scrollHeight;
+  if(forceScroll || nearBottom){ list.scrollTop = list.scrollHeight; forceScroll = false; }
+  if(editInput){
+    editInput.focus();
+    const n = editInput.value.length;
+    editInput.setSelectionRange(n, n);
+  }
 }
 
 function updateTimers(){
@@ -290,6 +389,7 @@ $("sendForm").addEventListener("submit", e => {
   const text = input.value.trim();
   if(!text) return;
   input.value = "";
+  forceScroll = true;
   col.add({
     text,
     from: me.id,
