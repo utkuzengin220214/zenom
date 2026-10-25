@@ -60,6 +60,7 @@ button,input{font:inherit;color:inherit}
 .gate-box button.back{
   background:none;border:1px solid var(--line);color:var(--muted);
 }
+.gate-box button[hidden]{display:none}
 
 /* ===== OTP kartı ===== */
 #stepRoom{width:min(400px,100%)}
@@ -216,7 +217,7 @@ form button:disabled{opacity:.5;cursor:default}
 <section id="gate">
   <div id="pointerLight"></div>
 
-  <!-- 1. adım: oda kodu (OTP) -->
+  <!-- 1. adım: oda kodu / şifre (OTP) -->
   <div class="gate-box" id="stepRoom">
     <div class="otp-card" id="otpCard" data-state="input">
       <h1 id="otpTitle">Oda kodu</h1>
@@ -224,12 +225,12 @@ form button:disabled{opacity:.5;cursor:default}
 
       <div class="otp-stage">
         <div class="otp-boxes" id="otpBoxes">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="one-time-code" aria-label="Oda kodu 1. hane">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Oda kodu 2. hane">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Oda kodu 3. hane">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Oda kodu 4. hane">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Oda kodu 5. hane">
-          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Oda kodu 6. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="one-time-code" aria-label="Kod 1. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Kod 2. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Kod 3. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Kod 4. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Kod 5. hane">
+          <input class="otp-box" type="text" inputmode="numeric" autocomplete="off" aria-label="Kod 6. hane">
         </div>
 
         <div class="otp-ring" aria-hidden="true">
@@ -247,6 +248,7 @@ form button:disabled{opacity:.5;cursor:default}
       </div>
 
       <div id="gateErr" role="alert"></div>
+      <button class="back" id="otpBack" type="button" hidden style="margin-top:14px;width:100%">Geri</button>
     </div>
   </div>
 
@@ -298,6 +300,12 @@ const PROFILES = {
   "22.02.14": { id: "B", name: "Karşı taraf" }
 };
 
+// Kimlik seçince sorulacak şifreler
+const PASSWORDS = {
+  "22.02.14": "222529",
+  "25.01.14": "212208"
+};
+
 // Görüldükten kaç ms sonra silinsin (1 dakika)
 const DELETE_AFTER_MS = 60 * 1000;
 
@@ -316,7 +324,7 @@ let editing = null;      // {id, value}
 let forceScroll = true;
 const seenReq = new Set();
 
-/* ---- OTP oda kodu girişi ---- */
+/* ---- OTP oda kodu / şifre girişi ---- */
 const OTP_LEN = 6;
 const CODE_DIGITS = ROOM_CODE.replace(/\D/g, "");
 const boxes = [...document.querySelectorAll(".otp-box")];
@@ -324,6 +332,13 @@ const card = $("otpCard");
 const ringProg = $("ringProg");
 const ringNum = $("ringNum");
 let otpBusy = false;
+let otpMode = "room";   // "room" = oda kodu, "pass" = şifre
+let pendingKey = null;
+function idleTexts(){
+  return otpMode === "room"
+    ? ["Oda kodu", "Sohbete girmek için 6 haneli oda kodunu yaz."]
+    : ["Şifre", pendingKey + " için 6 haneli şifreyi yaz."];
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function setState(s){ card.dataset.state = s; }
@@ -339,7 +354,7 @@ function resetOtp(){
   boxes.forEach(b => { b.value = ""; b.readOnly = false; b.classList.remove("filled", "err"); });
   $("otpBoxes").classList.remove("shake");
   setState("input");
-  setText("Oda kodu", "Sohbete girmek için 6 haneli oda kodunu yaz.");
+  setText(...idleTexts());
   $("gateErr").textContent = "";
   setRing(0);
 }
@@ -427,26 +442,36 @@ async function submitOtp(){
   setState("scatter");
   await sleep(650);
   setState("verifying");
-  setText("Doğrulanıyor…", "Kod güvenle kontrol ediliyor.");
+  setText("Doğrulanıyor…", otpMode === "room" ? "Kod güvenle kontrol ediliyor." : "Şifre güvenle kontrol ediliyor.");
   await runRing(1700);
   await sleep(150);
 
-  if(code === CODE_DIGITS){
+  const expected = otpMode === "room" ? CODE_DIGITS : PASSWORDS[pendingKey];
+
+  if(code === expected){
     setState("success");
-    setText("Erişim onaylandı", "Hoş geldin. Kimlik seçimine geçiliyor…");
-    burst();
-    await sleep(1700);
-    $("stepRoom").hidden = true;
-    $("stepPick").hidden = false;
+    if(otpMode === "room"){
+      setText("Erişim onaylandı", "Hoş geldin. Kimlik seçimine geçiliyor…");
+      burst();
+      await sleep(1700);
+      $("stepRoom").hidden = true;
+      $("stepPick").hidden = false;
+    } else {
+      setText("Şifre doğru", "Sohbete giriliyor…");
+      burst();
+      await sleep(1700);
+      enterAs(pendingKey);
+    }
   } else {
+    const errMsg = otpMode === "room" ? "Oda kodu yanlış, tekrar dene." : "Şifre yanlış, tekrar dene.";
     setState("input");
-    setText("Oda kodu", "Sohbete girmek için 6 haneli oda kodunu yaz.");
-    $("gateErr").textContent = "Oda kodu yanlış, tekrar dene.";
+    setText(...idleTexts());
+    $("gateErr").textContent = errMsg;
     boxes.forEach(b => b.classList.add("err"));
     $("otpBoxes").classList.add("shake");
     await sleep(700);
     resetOtp();
-    $("gateErr").textContent = "Oda kodu yanlış, tekrar dene.";
+    $("gateErr").textContent = errMsg;
     boxes[0].focus();
   }
 }
@@ -471,10 +496,31 @@ function enterAs(key){
   return true;
 }
 
+// Kimlik seçilince şifre ekranı açılır
 document.querySelectorAll(".pick").forEach(b => {
-  b.onclick = () => enterAs(b.dataset.key);
+  b.onclick = () => {
+    pendingKey = b.dataset.key;
+    otpMode = "pass";
+    $("stepPick").hidden = true;
+    $("stepRoom").hidden = false;
+    $("otpBack").hidden = false;
+    resetOtp();
+    boxes[0].focus();
+  };
 });
+// Şifre ekranından kimlik seçimine dön
+$("otpBack").onclick = () => {
+  otpMode = "room";
+  pendingKey = null;
+  $("otpBack").hidden = true;
+  $("stepRoom").hidden = true;
+  $("stepPick").hidden = false;
+  resetOtp();
+};
+// Kimlik seçiminden oda koduna dön
 $("backBtn").onclick = () => {
+  otpMode = "room";
+  pendingKey = null;
   $("stepPick").hidden = true;
   $("stepRoom").hidden = false;
   resetOtp();
